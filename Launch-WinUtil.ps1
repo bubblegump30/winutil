@@ -21,8 +21,9 @@ function Pause-WinUtilLauncher {
     }
 }
 
+$powerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
 if (-not (Test-WinUtilAdministrator)) {
-    $powerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $quotedScriptPath = '"{0}"' -f $PSCommandPath
     $argumentLine = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File $quotedScriptPath"
 
@@ -46,24 +47,25 @@ try {
     Write-Host "Source: $launcherUrl" -ForegroundColor DarkGray
     Write-Host ''
 
-    # Windows PowerShell 5.1 can otherwise negotiate an older TLS version on
-    # some systems. WinUtil is downloaded over HTTPS before execution.
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # Run WinUtil in a clean Windows PowerShell process. This intentionally
+    # mirrors the supported `irm https://christitus.com/win | iex` launch path
+    # and prevents this launcher's StrictMode/session state from leaking into
+    # the downloaded WinUtil script.
+    $command = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri '$launcherUrl' -UseBasicParsing | Invoke-Expression"
 
-    $scriptText = Invoke-RestMethod -Uri $launcherUrl -UseBasicParsing
-    if ([string]::IsNullOrWhiteSpace([string]$scriptText)) {
-        throw 'The WinUtil download returned an empty response.'
+    & $powerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command $command
+    $exitCode = $LASTEXITCODE
+
+    if ($exitCode -ne 0) {
+        throw "WinUtil exited with code $exitCode."
     }
-
-    $scriptBlock = [ScriptBlock]::Create([string]$scriptText)
-    & $scriptBlock
 }
 catch {
     Write-Host ''
     Write-Host 'WinUtil failed to start.' -ForegroundColor Red
     Write-Host $_.Exception.Message -ForegroundColor Red
     Write-Host ''
-    Write-Host 'Check your internet connection and make sure christitus.com is reachable.' -ForegroundColor Yellow
+    Write-Host 'The launcher reached WinUtil, but the WinUtil process returned an error.' -ForegroundColor Yellow
     Pause-WinUtilLauncher
     exit 1
 }
