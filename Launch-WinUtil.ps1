@@ -10,14 +10,21 @@ function Test-WinUtilAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Pause-WinUtilLauncher {
-    param([string]$Message = 'Press Enter to close this window')
+function Show-WinUtilLauncherError {
+    param([Parameter(Mandatory)][string]$Message)
 
     try {
-        [void](Read-Host $Message)
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $Message,
+            'WinUtil Launcher',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Error
+        )
     }
     catch {
-        Start-Sleep -Seconds 8
+        # The launcher intentionally has no visible console. If MessageBox
+        # initialization also fails, there is no secondary UI to display.
     }
 }
 
@@ -25,17 +32,14 @@ $powerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powe
 
 if (-not (Test-WinUtilAdministrator)) {
     $quotedScriptPath = '"{0}"' -f $PSCommandPath
-    $argumentLine = "-NoLogo -NoProfile -ExecutionPolicy Bypass -File $quotedScriptPath"
+    $argumentLine = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File $quotedScriptPath"
 
     try {
-        Start-Process -FilePath $powerShellExe -ArgumentList $argumentLine -Verb RunAs | Out-Null
+        Start-Process -FilePath $powerShellExe -ArgumentList $argumentLine -Verb RunAs -WindowStyle Hidden | Out-Null
         exit 0
     }
     catch {
-        Write-Host ''
-        Write-Host 'WinUtil could not request Administrator access.' -ForegroundColor Red
-        Write-Host $_.Exception.Message -ForegroundColor Red
-        Pause-WinUtilLauncher
+        Show-WinUtilLauncherError "WinUtil could not request Administrator access.`r`n`r`n$($_.Exception.Message)"
         exit 1
     }
 }
@@ -43,29 +47,20 @@ if (-not (Test-WinUtilAdministrator)) {
 $launcherUrl = 'https://christitus.com/win'
 
 try {
-    Write-Host 'Starting WinUtil...' -ForegroundColor Cyan
-    Write-Host "Source: $launcherUrl" -ForegroundColor DarkGray
-    Write-Host ''
-
-    # Run WinUtil in a clean Windows PowerShell process. This intentionally
-    # mirrors the supported `irm https://christitus.com/win | iex` launch path
-    # and prevents this launcher's StrictMode/session state from leaking into
-    # the downloaded WinUtil script.
+    # WinUtil runs in a clean Windows PowerShell process so this launcher's
+    # StrictMode/session state cannot leak into the downloaded script. The
+    # console is hidden while WinUtil's WPF interface remains visible.
     $command = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri '$launcherUrl' -UseBasicParsing | Invoke-Expression"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $argumentLine = "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
 
-    & $powerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command $command
-    $exitCode = $LASTEXITCODE
+    $process = Start-Process -FilePath $powerShellExe -ArgumentList $argumentLine -WindowStyle Hidden -Wait -PassThru
 
-    if ($exitCode -ne 0) {
-        throw "WinUtil exited with code $exitCode."
+    if ($process.ExitCode -ne 0) {
+        throw "WinUtil exited with code $($process.ExitCode)."
     }
 }
 catch {
-    Write-Host ''
-    Write-Host 'WinUtil failed to start.' -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Write-Host ''
-    Write-Host 'The launcher reached WinUtil, but the WinUtil process returned an error.' -ForegroundColor Yellow
-    Pause-WinUtilLauncher
+    Show-WinUtilLauncherError "WinUtil failed to start.`r`n`r`n$($_.Exception.Message)"
     exit 1
 }
